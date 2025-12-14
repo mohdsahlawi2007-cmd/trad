@@ -1,0 +1,126 @@
+from telegram.ext import Updater, CommandHandler
+from config import TELEGRAM_BOT_TOKEN
+from binance_client import get_price
+
+# تخزين بسيط للتنبيهات في الذاكرة (يختفي لو البوت طفى)
+alerts = {}  # user_id -> {"symbol": "BTCUSDT", "target": 70000}
+
+def start(update, context):
+    text = (
+        "أهلاً 👋\n"
+        "أنا بوت تداول بسيط للمبتدئين ورأس المال الصغير.\n\n"
+        "الأوامر المتاحة:\n"
+        "/price رمز_العملة - لمعرفة السعر الحالي\n"
+        "مثال: /price BTCUSDT\n\n"
+        "/alert رمز_العملة سعر_الهدف - تنبيه عند وصول السعر\n"
+        "مثال: /alert BTCUSDT 70000\n\n"
+        "⚠️ ملاحظة: البوت للتنبيه والتعلّم فقط، مو للتوصيات المضمونة."
+    )
+    update.message.reply_text(text)
+
+def price_command(update, context):
+    try:
+        if not context.args:
+            update.message.reply_text("اكتب رمز العملة بعد الأمر.\nمثال:\n/price BTCUSDT")
+            return
+
+        symbol = context.args[0].upper()
+        price = get_price(symbol)
+        update.message.reply_text(f"السعر الحالي لـ {symbol}: {price}")
+    except Exception:
+        update.message.reply_text("ما قدرت أجيب السعر. تأكد من رمز العملة مثل: BTCUSDT, ETHUSDT")
+
+def alert_command(update, context):
+    try:
+        if len(context.args) < 2:
+            update.message.reply_text(
+                "استخدام الأمر:\n"
+                "/alert رمز_العملة سعر_الهدف\n"
+                "مثال:\n"
+                "/alert BTCUSDT 70000"
+            )
+            return
+
+        symbol = context.args[0].upper()
+        target = float(context.args[1])
+        user_id = update.message.from_user.id
+
+        alerts[user_id] = {
+            "symbol": symbol,
+            "target": target
+        }
+
+        update.message.reply_text(
+            f"✅ تم ضبط تنبيه لك:\n"
+            f"- العملة: {symbol}\n"
+            f"- السعر المستهدف: {target}"
+        )
+    except Exception:
+        update.message.reply_text("تأكد من كتابة السعر كرقم صحيح.\nمثال:\n/alert BTCUSDT 70000")
+
+def myalert_command(update, context):
+    user_id = update.message.from_user.id
+    if user_id not in alerts:
+        update.message.reply_text("ما عندك أي تنبيه حالياً.")
+        return
+
+    data = alerts[user_id]
+    update.message.reply_text(
+        f"تنبيهك الحالي:\n"
+        f"- العملة: {data['symbol']}\n"
+        f"- السعر المستهدف: {data['target']}"
+    )
+
+def clearalert_command(update, context):
+    user_id = update.message.from_user.id
+    if user_id in alerts:
+        del alerts[user_id]
+        update.message.reply_text("✅ تم حذف تنبيهك.")
+    else:
+        update.message.reply_text("ما عندك أي تنبيه مسجل.")
+
+def check_alerts(context):
+    """
+    هذه الدالة تشتغل كل فترة (مثلاً كل 30 ثانية) وتشيك الأسعار
+    """
+    for user_id, data in list(alerts.items()):
+        symbol = data["symbol"]
+        target = data["target"]
+
+        try:
+            current_price = get_price(symbol)
+        except Exception:
+            continue
+
+        # هنا من باب البساطة: ننبه إذا وصل أو تعدى الهدف (فوق أو تحت)
+        if current_price >= target:
+            context.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"🚀 تنبيه السعر!\n"
+                    f"{symbol} وصل السعر {current_price}\n"
+                    f"(هدفك كان: {target})"
+                )
+            )
+            # بعد التنبيه نحذف التنبيه حتى ما يتكرر
+            del alerts[user_id]
+
+def main():
+    updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("price", price_command))
+    dp.add_handler(CommandHandler("alert", alert_command))
+    dp.add_handler(CommandHandler("myalert", myalert_command))
+    dp.add_handler(CommandHandler("clearalert", clearalert_command))
+
+    # Job Queue لمتابعة الأسعار بشكل دوري
+    job_queue = updater.job_queue
+    job_queue.run_repeating(check_alerts, interval=30, first=10)
+
+    updater.start_polling()
+    updater.idle()
+
+if name == "__main__":
+    main()
